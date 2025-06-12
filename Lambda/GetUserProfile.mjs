@@ -129,13 +129,13 @@ async function connectToNeon() {
       ssl: { rejectUnauthorized: false },
     });
     await neonClient.connect();
-    console.log("Connected to Neon PostgreSQL.");
+    // console.log("Connected to Neon PostgreSQL.");
   }
   return neonClient;
 }
 
 export const handler = async (event) => {
-  console.log("Backend Lambda event:", JSON.stringify(event, null, 2));
+//   console.log("Backend Lambda event:", JSON.stringify(event, null, 2));
 
   const authenticatedUser = event.requestContext.authorizer;
 
@@ -171,7 +171,7 @@ export const handler = async (event) => {
     let profileData;
 
     if (userRes.rows.length === 0) {
-      console.log(`User ${authenticatedUser.uid} not found. Registering new user.`);
+    //   console.log(`User ${authenticatedUser.uid} not found. Registering new user.`);
 
       // Insert user and set created_at, updatedtier_at, lastlogin_at to current epoch seconds
       const insertUserQuery = `
@@ -198,7 +198,7 @@ export const handler = async (event) => {
       await client.query(updateLoginTimeQuery, [authenticatedUser.uid]);
     }
 
-    console.log("User profile (from DB):", profileData);
+    // console.log("User profile (from DB):", profileData);
 
     return {
       statusCode: 200,

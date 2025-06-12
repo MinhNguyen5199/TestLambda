@@ -19,7 +19,7 @@ async function getSecret(secretName) {
 
 // --- CHANGE: Export the handler using ES Module syntax ---
 export const handler = async (event) => {
-    console.log('Authorizer event:', JSON.stringify(event, null, 2));
+    // console.log('Authorizer event:', JSON.stringify(event, null, 2));
 
     const idToken = event.authorizationToken;
 
@@ -38,11 +38,11 @@ export const handler = async (event) => {
                 credential: cert(serviceAccount)
             });
             firebaseAuth = getAuth(firebaseAdminApp);
-            console.log('Firebase Admin SDK initialized.');
+            // console.log('Firebase Admin SDK initialized.');
         }
 
         const decodedToken = await firebaseAuth.verifyIdToken(token);
-        console.log('Firebase ID Token verified. Decoded:', decodedToken);
+        // console.log('Firebase ID Token verified. Decoded:', decodedToken);
 
         const userId = decodedToken.uid;
         const email = decodedToken.email || null;
