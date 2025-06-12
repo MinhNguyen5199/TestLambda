@@ -90,9 +90,9 @@ export const handler = async (event) => {
                 [tierId, userId]
             );
             await client.query(
-                `INSERT INTO subscriptions (user_id, tier_id, status, start_date, expires_at, stripe_subscription_id, canceled_at, ended_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-                 [userId, tierId, sub.status, sub.items.data[0].current_period_start, sub.items.data[0].current_period_end, stripeSubscriptionId, sub.canceled_at, sub.ended_at]
+                `INSERT INTO subscriptions (user_id, tier_id, status, start_date, expires_at, stripe_subscription_id, canceled_at, ended_at, subscription_interval)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+                 [userId, tierId, sub.status, sub.items.data[0].current_period_start, sub.items.data[0].current_period_end, stripeSubscriptionId, sub.canceled_at, sub.ended_at, sub.items.data[0].plan.interval]
             );
 
             await client.query('COMMIT');
