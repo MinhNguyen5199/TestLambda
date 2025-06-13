@@ -44,6 +44,15 @@ export const handler = async (event) => {
         const decodedToken = await firebaseAuth.verifyIdToken(token);
         // console.log('Firebase ID Token verified. Decoded:', decodedToken);
 
+        // --- NEW: Enforce Email Verification ---
+        // This is the crucial check. The decoded token from Firebase includes an 'email_verified' boolean.
+        if (!decodedToken.email_verified) {
+            console.warn(`Access denied for unverified email: ${decodedToken.email}`);
+            // Return a "Deny" policy, which will cause the API Gateway to return a 403 Forbidden error.
+            return generatePolicy(decodedToken.uid, 'Deny', event.methodArn);
+        }
+        // --- END NEW ---
+
         const userId = decodedToken.uid;
         const email = decodedToken.email || null;
         const displayName = decodedToken.name || null;

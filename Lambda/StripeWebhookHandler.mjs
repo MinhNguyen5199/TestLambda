@@ -1,9 +1,8 @@
-// StripeWebhookHandler/index.js
 import Stripe from 'stripe';
-import { Client } from 'pg'; // Your PostgreSQL client
+import { Client } from 'pg';
 import { SecretsManagerClient, GetSecretValueCommand } from "@aws-sdk/client-secrets-manager";
 
-// --- Helper Functions (No changes needed here) ---
+// --- (Your helper functions remain the same) ---
 const secretsManagerClient = new SecretsManagerClient({});
 let neonClient;
 
@@ -17,114 +16,107 @@ async function getSecret(secretName) {
 }
 
 async function connectToNeon() {
-    if (!neonClient || neonClient.ended) { // Check if client exists or has been ended
+    if (!neonClient || neonClient.ended) {
       const neonConnectionString = await getSecret(process.env.NEON_CONNECTION_STRING_SECRET_NAME);
       neonClient = new Client({
         connectionString: neonConnectionString,
         ssl: { rejectUnauthorized: false },
       });
       await neonClient.connect();
-      console.log("Connected to Neon PostgreSQL.");
+      console.log("Connected to Neon PostgreSQL for webhook processing.");
     }
     return neonClient;
 }
-
-function determineTierFromSession(session) {
-    const priceId = session.line_items?.data[0]?.price.id;
-    console.log(`Determining tier for Price ID: ${priceId}`);
-
-    const proPriceIds = [
-        'price_1RYvKSHEs83qji0bAOsQovd7', 'price_1RYvM6HEs83qji0b3Mg8sr36',
-        'price_1RYvQwHEs83qji0bHz92py3y', 'price_1RYvS0HEs83qji0bXtlT8ZnM'
-    ];
-    const vipPriceIds = [
-        'price_1RYvMyHEs83qji0bMeaQol9F', 'price_1RYvNpHEs83qji0bJxpPMHRC',
-        'price_1RYvSvHEs83qji0bP8bsobz9', 'price_1RYvTWHEs83qji0bZ4zEyWif'
-    ];
-
-    if (proPriceIds.includes(priceId)) return 'pro';
-    if (vipPriceIds.includes(priceId)) return 'vip';
-    return null;
-}
-// ---------------------------------------------------
+// ---------------------------------------------
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 export const handler = async (event) => {
-    const signature = event.headers['stripe-signature'];
-    const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
-
     let stripeEvent;
     try {
-        stripeEvent = stripe.webhooks.constructEvent(event.body, signature, endpointSecret);
+        stripeEvent = stripe.webhooks.constructEvent(event.body, event.headers['stripe-signature'], process.env.STRIPE_WEBHOOK_SECRET);
     } catch (err) {
-        console.warn(`Webhook signature verification failed: ${err.message}`);
-        return { statusCode: 400 };
+        return { statusCode: 400, body: `Webhook Error: ${err.message}` };
     }
 
     const client = await connectToNeon();
-    // --- Main Logic Block ---
+    
     try {
-        if (stripeEvent.type === 'checkout.session.completed') {
-            // **FIX #1: Retrieve the full session object to get line_items**
-            const sessionWithLineItems = await stripe.checkout.sessions.retrieve(
-                stripeEvent.data.object.id, { expand: ['line_items'] }
-            );
+        switch (stripeEvent.type) {
+            
+            case 'checkout.session.completed': {
+                const session = await stripe.checkout.sessions.retrieve(stripeEvent.data.object.id, { expand: ['subscription.items.data.price'] });
+                const sub = session.subscription;
+                if (!sub) break;
+                console.log(sub);
+                console.log(`------`)
+                console.log(session);
 
-            const userId = sessionWithLineItems.client_reference_id;
-            const stripeSubscriptionId = sessionWithLineItems.subscription;
-            const tierId = determineTierFromSession(sessionWithLineItems);
+                const tier = sub.items.data[0].price.lookup_key;
+                console.log('----')
+                console.log(sub.items.data[0]);
 
-            if (!tierId) {
-                console.error(`Configuration Error: Could not determine tier for session ${sessionWithLineItems.id}`);
-                return { statusCode: 200, body: 'Configuration error, tier not found.' }; // Return 200 so Stripe doesn't retry
+                // const userId = session.client_reference_id;
+                // const customerId = session.customer;
+
+                const userId = sub.metadata.firebaseUID;
+                const customerId = session.customer;
+
+                await client.query('BEGIN');
+                await client.query(`UPDATE users SET current_tier = $1, stripe_customer_id = $2, updatedtier_at = EXTRACT(epoch FROM NOW()) WHERE firebase_uid = $3`, [tier, customerId, userId]);
+                
+                // --- FIX: Removed to_timestamp() ---
+                await client.query(
+                    `INSERT INTO subscriptions (user_id, tier_id, status, start_date, expires_at, stripe_subscription_id, subscription_interval) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+                    [userId, tier, sub.status, sub.items.data[0].current_period_start, sub.trial_end || sub.items.data[0].current_period_end, sub.id, sub.items.data[0].plan.interval]
+                );
+                await client.query('COMMIT');
+                break;
             }
 
-            const sub = await stripe.subscriptions.retrieve(stripeSubscriptionId);
-            console.log(sub)
+            case 'invoice.paid': {
+                const invoice = stripeEvent.data.object;
+                if (invoice.subscription) {
+                    const sub = await stripe.subscriptions.retrieve(invoice.subscription);
+                    
+                    // --- FIX: Removed to_timestamp() ---
+                    await client.query(`UPDATE subscriptions SET status = $1, expires_at = $2 WHERE stripe_subscription_id = $3`, [sub.status, sub.items.data[0].current_period_end, sub.id]);
+                    
+                    console.log(`✅ invoice.paid: Subscription ${sub.id} renewed. New expiry: ${sub.items.data[0].current_period_end}`);
+                }
+                break;
+            }
 
-            await client.query('BEGIN');
-            // **FIX #2: Corrected the 'updatedtier_at' column name to 'updatedtier_at' and used NOW()**
-            await client.query(
-                `UPDATE users SET current_tier = $1, updatedtier_at = EXTRACT(epoch FROM NOW()) WHERE firebase_uid = $2`,
-                [tierId, userId]
-            );
-            await client.query(
-                `INSERT INTO subscriptions (user_id, tier_id, status, start_date, expires_at, stripe_subscription_id, canceled_at, ended_at, subscription_interval)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-                 [userId, tierId, sub.status, sub.items.data[0].current_period_start, sub.items.data[0].current_period_end, stripeSubscriptionId, sub.canceled_at, sub.ended_at, sub.items.data[0].plan.interval]
-            );
+            case 'customer.subscription.updated': {
+                const sub = stripeEvent.data.object;
+                const newTier = sub.items.data[0].price.metadata.tier;
+                await client.query('BEGIN');
+                await client.query(`UPDATE users SET current_tier = $1, updatedtier_at = EXTRACT(epoch FROM NOW()) WHERE stripe_customer_id = $2`, [newTier, sub.customer]);
 
-            await client.query('COMMIT');
-            console.log(`✅ checkout.session.completed: Successfully granted '${tierId}' to user ${userId}`);
+                // --- FIX: Removed to_timestamp() ---
+                await client.query(`UPDATE subscriptions SET tier_id = $1, status = $2, expires_at = $3, subscription_interval = $4 WHERE stripe_subscription_id = $5`, [newTier, sub.status, sub.items.data[0].current_period_end, sub.items.data[0].plan.interval, sub.id]);
+                
+                await client.query('COMMIT');
+                break;
+            }
 
-        } else if (stripeEvent.type === 'customer.subscription.deleted') {
-            const subscription = stripeEvent.data.object;
-            const stripeSubId = subscription.id;
-
-            await client.query('BEGIN');
-            await client.query(
-                `UPDATE users SET current_tier = 'basic', updatedtier_at = EXTRACT(epoch FROM NOW()) WHERE firebase_uid = (SELECT user_id FROM subscriptions WHERE stripe_subscription_id = $1)`,
-                [stripeSubId]
-            );
-            await client.query(
-                `UPDATE subscriptions SET status = 'canceled', expires_at = to_timestamp($1) WHERE stripe_subscription_id = $2`,
-                [subscription.canceled_at, stripeSubId]
-            );
-            await client.query('COMMIT');
-            console.log(`✅ customer.subscription.deleted: Successfully downgraded user for subscription ${stripeSubId}`);
-
-        } else {
-            console.log(`Ignoring event type: ${stripeEvent.type}`);
+            case 'customer.subscription.deleted': {
+                const sub = stripeEvent.data.object;
+                await client.query('BEGIN');
+                await client.query(`UPDATE users SET current_tier = 'basic', updatedtier_at = EXTRACT(epoch FROM NOW()) WHERE stripe_customer_id = $1`, [sub.customer]);
+                
+                // --- FIX: Removed to_timestamp() from ended_at as well ---
+                await client.query(`UPDATE subscriptions SET status = 'canceled', ended_at = $1 WHERE stripe_subscription_id = $2`, [sub.canceled_at, sub.id]);
+                
+                await client.query('COMMIT');
+                break;
+            }
         }
     } catch (error) {
-        // This will catch errors from the main logic block, but not from DB connection or signature verification
-        console.error('Error processing webhook event:', error);
-        // We don't rollback here because the individual blocks handle their own transactions
-        return { statusCode: 500 }; // Return error to have Stripe retry
+        console.error(`Error processing '${stripeEvent.type}':`, error);
+        await client.query('ROLLBACK');
+        return { statusCode: 500, body: 'Internal server error while processing webhook.' };
     }
-
-    // **FIX #3: Removed the `finally` block to allow for connection reuse.**
 
     return { statusCode: 200, body: JSON.stringify({ received: true }) };
 };
