@@ -9,9 +9,9 @@ import { handler as firebaseAuthHandler } from './Lambda/FirebaseAuthorizer.mjs'
 import { handler as getUserProfileHandler } from './Lambda/GetUserProfile.mjs';
 import { handler as createCheckoutSessionHandler } from './Lambda/CreateCheckoutSession.mjs';
 import { handler as stripeWebhookHandler } from './Lambda/StripeWebhookHandler.mjs';
-// --- NEW: Import the new handlers ---
 import { handler as createPortalSessionHandler } from './Lambda/CreatePortalSession.mjs';
 import { handler as upgradeSubscriptionHandler } from './Lambda/UpgradeSubscription.mjs';
+import { handler as cancelSubscriptionHandler } from './Lambda/CancelSubscription.mjs'; // Import new handler
 
 
 dotenv.config();
@@ -111,6 +111,22 @@ app.post('/upgrade-subscription', async (req, res) => {
     } catch (error) {
         res.status(500).send({ message: "Failed to upgrade subscription." });
     }
+});
+
+app.post('/cancel-subscription', async (req, res) => {
+  const token = req.headers.authorization || '';
+  const authEvent = { authorizationToken: token, methodArn: 'local/dev' };
+  const authResult = await firebaseAuthHandler(authEvent);
+  if (authResult.policyDocument?.Statement[0]?.Effect !== 'Allow') {
+      return res.status(401).json({ message: 'Unauthorized' });
+  }
+  const event = { requestContext: { authorizer: authResult.context } };
+  try {
+      const result = await cancelSubscriptionHandler(event);
+      res.status(result.statusCode).set(result.headers).send(result.body);
+  } catch (error) {
+      res.status(500).send({ message: "Failed to cancel subscription." });
+  }
 });
 
 

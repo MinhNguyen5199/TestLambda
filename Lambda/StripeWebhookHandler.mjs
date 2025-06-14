@@ -48,20 +48,14 @@ export const handler = async (event) => {
                 const session = await stripe.checkout.sessions.retrieve(stripeEvent.data.object.id, { expand: ['subscription.items.data.price'] });
                 const sub = session.subscription;
                 if (!sub) break;
-                console.log(sub);
-                console.log(`------`)
-                console.log(session);
 
                 const tier = sub.items.data[0].price.lookup_key;
-                console.log('----')
-                console.log(sub.items.data[0]);
 
                 // const userId = session.client_reference_id;
                 // const customerId = session.customer;
 
                 const userId = sub.metadata.firebaseUID;
                 const customerId = session.customer;
-
                 await client.query('BEGIN');
                 await client.query(`UPDATE users SET current_tier = $1, stripe_customer_id = $2, updatedtier_at = EXTRACT(epoch FROM NOW()) WHERE firebase_uid = $3`, [tier, customerId, userId]);
                 
@@ -89,7 +83,7 @@ export const handler = async (event) => {
 
             case 'customer.subscription.updated': {
                 const sub = stripeEvent.data.object;
-                const newTier = sub.items.data[0].price.metadata.tier;
+                const newTier = sub.items.data[0].price.lookup_key;
                 await client.query('BEGIN');
                 await client.query(`UPDATE users SET current_tier = $1, updatedtier_at = EXTRACT(epoch FROM NOW()) WHERE stripe_customer_id = $2`, [newTier, sub.customer]);
 
@@ -102,14 +96,14 @@ export const handler = async (event) => {
 
             case 'customer.subscription.deleted': {
                 const sub = stripeEvent.data.object;
+                console.log("deleted sub")
+                console.log(sub)
                 await client.query('BEGIN');
                 await client.query(`UPDATE users SET current_tier = 'basic', updatedtier_at = EXTRACT(epoch FROM NOW()) WHERE stripe_customer_id = $1`, [sub.customer]);
-                
-                // --- FIX: Removed to_timestamp() from ended_at as well ---
                 await client.query(`UPDATE subscriptions SET status = 'canceled', ended_at = $1 WHERE stripe_subscription_id = $2`, [sub.canceled_at, sub.id]);
-                
                 await client.query('COMMIT');
                 break;
+
             }
         }
     } catch (error) {

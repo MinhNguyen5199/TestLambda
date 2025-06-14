@@ -44,7 +44,17 @@ export const handler = async (event) => {
 
   try {
     const client = await connectToNeon();
-    const checkUserQuery = `SELECT * FROM users WHERE firebase_uid = $1`;
+    const checkUserQuery = `
+        SELECT
+            u.created_at, u.current_tier, u.email, u.firebase_uid, u.is_student, u.lastlogin_at,
+            u.stripe_customer_id, u.updatedtier_at, u.username, s.status as subscription_status,
+            s.cancel_at_period_end, s.expires_at as subscription_expires_at
+        FROM users u
+        LEFT JOIN subscriptions s ON u.firebase_uid = s.user_id AND s.status = 'active'
+        WHERE u.firebase_uid = $1
+        ORDER BY u.created_at DESC
+        LIMIT 1
+    `;
     const userRes = await client.query(checkUserQuery, [authenticatedUser.uid]);
 
     let profileData;
