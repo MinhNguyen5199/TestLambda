@@ -2,7 +2,7 @@ import Stripe from 'stripe';
 import { Client } from 'pg';
 import { SecretsManagerClient, GetSecretValueCommand } from "@aws-sdk/client-secrets-manager";
 
-// --- (Helper Functions: getSecret, connectToNeon) ---
+// --- (Helper Functions are unchanged) ---
 const secretsManagerClient = new SecretsManagerClient({});
 let neonClient;
 
@@ -40,27 +40,31 @@ export const handler = async (event) => {
 
     try {
         const client = await connectToNeon();
+
+        // --- THIS IS THE FIX: Allow cancellation for 'active' OR 'trialing' subscriptions ---
         const res = await client.query(
-            `SELECT stripe_subscription_id FROM subscriptions WHERE user_id = $1 AND status = 'active' ORDER BY created_at DESC LIMIT 1`,
+            `SELECT stripe_subscription_id FROM subscriptions WHERE user_id = $1 AND status IN ('active', 'trialing') ORDER BY created_at DESC LIMIT 1`,
             [authenticatedUser.uid]
         );
 
         const subscriptionId = res.rows[0]?.stripe_subscription_id;
 
         if (!subscriptionId) {
-            return { statusCode: 404, body: JSON.stringify({ message: 'No active subscription found to cancel.' }) };
+            return { statusCode: 404, body: JSON.stringify({ message: 'No active or trialing subscription found to cancel.' }) };
         }
 
-        await stripe.subscriptions.update(subscriptionId, {
+        const updatedSubscription = await stripe.subscriptions.update(subscriptionId, {
             cancel_at_period_end: true,
         });
-
+        
         return {
             statusCode: 200,
             headers: { "Access-Control-Allow-Origin": "*" },
-            body: JSON.stringify({ message: 'Subscription cancellation scheduled successfully.' }),
+            body: JSON.stringify({ 
+                message: 'Subscription cancellation scheduled successfully.',
+                cancel_at: updatedSubscription.cancel_at 
+            }),
         };
-
     } catch (error) {
         console.error('Error canceling subscription:', error);
         return { statusCode: 500, body: JSON.stringify({ message: 'Failed to cancel subscription.' }) };

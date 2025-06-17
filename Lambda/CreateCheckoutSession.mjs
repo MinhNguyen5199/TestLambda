@@ -1,4 +1,34 @@
+import { json } from 'express';
 import Stripe from 'stripe';
+import { Client } from 'pg';
+import { SecretsManagerClient, GetSecretValueCommand } from "@aws-sdk/client-secrets-manager";
+
+// --- (Helper Functions: getSecret, connectToNeon) ---
+const secretsManagerClient = new SecretsManagerClient({});
+let neonClient;
+
+async function getSecret(secretName) {
+    const command = new GetSecretValueCommand({ SecretId: secretName });
+    const data = await secretsManagerClient.send(command);
+    if ("SecretString" in data) {
+      return data.SecretString;
+    }
+    throw new Error(`SecretString not found for ${secretName}`);
+}
+
+async function connectToNeon() {
+    if (!neonClient || neonClient.ended) {
+      const neonConnectionString = await getSecret(process.env.NEON_CONNECTION_STRING_SECRET_NAME);
+      neonClient = new Client({
+        connectionString: neonConnectionString,
+        ssl: { rejectUnauthorized: false },
+      });
+      await neonClient.connect();
+      console.log("Connected to Neon PostgreSQL for webhook processing.");
+    }
+    return neonClient;
+}
+// ----------------------------------------------------
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
@@ -31,12 +61,31 @@ export const handler = async (event) => {
     }
 
     try {
+
+        const client = await connectToNeon();
+
+        // --- NEW: Check if user has already had a trial ---
+        if (config.type === 'trial') {
+            const userResult = await client.query('SELECT had_trial FROM users WHERE firebase_uid = $1', [authenticatedUser.uid]);
+            const userHasHadTrial = userResult.rows[0]?.had_trial;
+
+            if (userHasHadTrial) {
+                return { 
+                    statusCode: 403, // Forbidden
+                    body: JSON.stringify({ message: 'You have already used your one-time trial offer.' }) 
+                };
+            }
+        }
+        // --- END NEW CHECK ---
+
+
         const customer = await stripe.customers.create({
             email: authenticatedUser.email,
             metadata: { firebaseUID: authenticatedUser.uid }
         });
 
         let sessionConfig;
+        console.log(config);
 
         // Configure session for a paid trial
         if (config.type === 'trial') {
@@ -49,7 +98,8 @@ export const handler = async (event) => {
                 subscription_data: {
                     trial_period_days: 7,
                     metadata: { firebaseUID: authenticatedUser.uid }
-                }
+                },
+                
             };
         } 
         // Configure session for a direct subscription (no trial)
@@ -65,7 +115,6 @@ export const handler = async (event) => {
         
         const session = await stripe.checkout.sessions.create({
             ...sessionConfig,
-            payment_method_types: ['card'],
             customer: customer.id,
             success_url: `http://localhost:3000/payment-success`, // Replace in prod
             cancel_url: `http://localhost:3000/dashboard/upgrade`,     // Replace in prod

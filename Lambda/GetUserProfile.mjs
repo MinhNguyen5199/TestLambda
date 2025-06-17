@@ -47,10 +47,10 @@ export const handler = async (event) => {
     const checkUserQuery = `
         SELECT
             u.created_at, u.current_tier, u.email, u.firebase_uid, u.is_student, u.lastlogin_at,
-            u.stripe_customer_id, u.updatedtier_at, u.username, s.status as subscription_status,
+            u.stripe_customer_id, u.updatedtier_at, u.username, u.had_trial, s.status as subscription_status,
             s.cancel_at_period_end, s.expires_at as subscription_expires_at
         FROM users u
-        LEFT JOIN subscriptions s ON u.firebase_uid = s.user_id AND s.status = 'active'
+        LEFT JOIN subscriptions s ON u.firebase_uid = s.user_id AND s.status = 'active' OR s.status = 'trialing'
         WHERE u.firebase_uid = $1
         ORDER BY u.created_at DESC
         LIMIT 1
