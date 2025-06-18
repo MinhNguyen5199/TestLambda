@@ -12,6 +12,7 @@ import { handler as stripeWebhookHandler } from './Lambda/StripeWebhookHandler.m
 import { handler as createPortalSessionHandler } from './Lambda/CreatePortalSession.mjs';
 import { handler as upgradeSubscriptionHandler } from './Lambda/UpgradeSubscription.mjs';
 import { handler as cancelSubscriptionHandler } from './Lambda/CancelSubscription.mjs'; // Import new handler
+import { handler as getInvoicesHandler } from './Lambda/GetInvoices.mjs'; // <-- 1. IMPORT THE NEW HANDLER
 
 
 dotenv.config();
@@ -129,6 +130,28 @@ app.post('/cancel-subscription', async (req, res) => {
   }
 });
 
+app.post('/get-invoices', async (req, res) => {
+  const token = req.headers.authorization || '';
+  const authEvent = { authorizationToken: token, methodArn: 'local/dev' };
+  const authResult = await firebaseAuthHandler(authEvent);
+
+  if (authResult.policyDocument?.Statement[0]?.Effect !== 'Allow') {
+      return res.status(401).json({ message: 'Unauthorized' });
+  }
+
+  const event = {
+      requestContext: { authorizer: authResult.context },
+      body: req.body ? JSON.stringify(req.body) : null,
+  };
+
+  try {
+      const result = await getInvoicesHandler(event);
+      res.status(result.statusCode).set(result.headers).send(result.body);
+  } catch (error) {
+      console.error("Error in /get-invoices route:", error);
+      res.status(500).send({ message: "Failed to fetch invoices." });
+  }
+});
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {

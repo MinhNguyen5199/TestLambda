@@ -61,7 +61,6 @@ export const handler = async (event) => {
         const newPrice = await stripe.prices.retrieve(newPriceId);
 
         // Determine if it's an upgrade or downgrade
-        const isUpgrade = newPrice.unit_amount > currentPrice.unit_amount;
 
         await stripe.subscriptions.update(subscriptionId, {
             cancel_at_period_end: false,
@@ -69,7 +68,7 @@ export const handler = async (event) => {
                 id: currentSubscription.items.data[0].id,
                 price: newPriceId,
             }],
-            proration_behavior: isUpgrade ? 'create_prorations' : 'none', // Prorate for upgrades, don't for downgrades
+            proration_behavior: 'always_invoice', // Prorate for upgrades, don't for downgrades
         });
 
         const message = isUpgrade ? 'Subscription upgrade initiated successfully.' : 'Subscription downgrade scheduled for the end of the billing period.';
